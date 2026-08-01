@@ -222,7 +222,6 @@ module Puma
               # hence we need to trim when todo is empty.
               if @trim_requested > 0
                 @trim_requested -= 1
-                not_full.signal
                 trim_thread(processor)
               end
 
@@ -273,12 +272,13 @@ module Puma
     #
     # Must be called with @mutex held, on the worker thread being trimmed.
     # Performs the trim bookkeeping and exits the current thread. Signals
-    # not_full because the exit lowers busy_threads, which may unblock
-    # threads waiting in wait_until_not_full.
+    # not_full after updating the pool state because the exit lowers
+    # busy_threads, which may unblock threads waiting in wait_until_not_full.
     #
     def trim_thread(processor)
       @spawned -= 1
       @processors.delete(processor)
+      @not_full.signal
       trigger_before_thread_exit_hooks
       Thread.exit
     end

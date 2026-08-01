@@ -281,6 +281,51 @@ class TestThreadPool < PumaTest
     3.times { release << true }
   end
 
+  def test_force_trim_while_busy_signals_not_full_after_updating_pool_state
+    release = Queue.new
+    started = Queue.new
+    waiter = nil
+
+    pool = new_pool(0, 2) do
+      started << true
+      release.pop
+    end
+
+    state_when_signaled = Queue.new
+    not_full = ConditionVariable.new
+    not_full.define_singleton_method(:signal) do
+      current_processor_registered = pool.instance_variable_get(:@processors).any? do |processor|
+        processor.thread == Thread.current
+      end
+      state_when_signaled << [pool.spawned, current_processor_registered]
+      super()
+    end
+    pool.instance_variable_set(:@not_full, not_full)
+
+    2.times { pool << true }
+    2.times { started.pop }
+
+    admitted = Queue.new
+    waiter = Thread.new do
+      pool.wait_until_not_full
+      admitted << true
+    end
+    wait_until { waiter.alive? && waiter.stop? }
+
+    pool.trim(true)
+    release << true
+
+    spawned, processor_registered = Timeout.timeout(1) { state_when_signaled.pop }
+    assert_equal 1, spawned
+    refute processor_registered
+    assert Timeout.timeout(1) { admitted.pop }
+    assert_equal 1, pool.spawned
+    assert_equal 0, pool.trim_requested
+  ensure
+    waiter&.kill
+    2.times { release << true }
+  end
+
   def test_shutdown_with_pending_trims_processes_all_queued_work
     release = Queue.new
     processed = Queue.new
